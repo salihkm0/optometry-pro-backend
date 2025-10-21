@@ -126,7 +126,13 @@ const shopSchema = new mongoose.Schema({
     totalAppointments: { type: Number, default: 0 },
     monthlyGrowth: { type: Number, default: 0 },
     lastUpdated: { type: Date, default: Date.now }
+  },
+  createdBy : {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   }
+
 }, {
   timestamps: true
 });

@@ -1,19 +1,173 @@
-const { default: mongoose } = require('mongoose');
+const mongoose = require('mongoose');
 const Shop = require('../Models/Shop.js');
 const User = require('../Models/User.js');
 
-// Get all shops (admin only)
+// Create new shop with owner (admin only) - FIXED VERSION
+const createShop = async (req, res) => {
+  try {
+    const { name, contact, settings, owner } = req.body;
+
+    console.log('Creating shop with data:', { name, contact, owner });
+
+    // Validate required fields
+    if (!name || !contact?.email) {
+      return res.status(400).json({ 
+        message: 'Shop name and email are required' 
+      });
+    }
+
+    if (!owner?.name || !owner?.email || !owner?.password) {
+      return res.status(400).json({ 
+        message: 'Owner name, email, and password are required' 
+      });
+    }
+
+    // Check if shop with same email already exists
+    const existingShop = await Shop.findOne({ 'contact.email': contact.email });
+    if (existingShop) {
+      return res.status(400).json({ 
+        message: 'A shop with this email already exists' 
+      });
+    }
+
+    // Check if owner with same email already exists
+    const existingOwner = await User.findOne({ email: owner.email });
+    if (existingOwner) {
+      return res.status(400).json({ 
+        message: 'A user with this email already exists' 
+      });
+    }
+
+    // Create shop owner user first
+    const ownerUser = new User({
+      name: owner.name,
+      email: owner.email,
+      phone: owner.phone,
+      password: owner.password,
+      role: 'shop_owner',
+      isActive: true,
+      createdBy: req.user._id
+    });
+
+    await ownerUser.save();
+
+    // Create new shop with owner reference
+    const shop = new Shop({
+      name,
+      owner: ownerUser._id,
+      contact: {
+        email: contact.email,
+        phone: contact.phone,
+        address: contact.address || {}
+      },
+      settings: settings || {
+        timezone: 'UTC',
+        currency: 'USD',
+        businessHours: {
+          monday: { open: '09:00', close: '17:00', closed: false },
+          tuesday: { open: '09:00', close: '17:00', closed: false },
+          wednesday: { open: '09:00', close: '17:00', closed: false },
+          thursday: { open: '09:00', close: '17:00', closed: false },
+          friday: { open: '09:00', close: '17:00', closed: false },
+          saturday: { open: '09:00', close: '17:00', closed: false },
+          sunday: { open: '09:00', close: '17:00', closed: true }
+        }
+      },
+      createdBy: req.user._id
+    });
+
+    await shop.save();
+
+    // Update owner user with shop reference
+    ownerUser.shop = shop._id;
+    await ownerUser.save();
+
+    // Populate the response
+    await shop.populate('owner', 'name email phone');
+    await shop.populate('createdBy', 'name email');
+
+    res.status(201).json({
+      message: 'Shop and owner created successfully',
+      shop
+    });
+
+  } catch (error) {
+    console.error('Create shop error:', error);
+    
+    // Clean up: if user was created but shop creation failed, delete the user
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: Object.values(error.errors).map(e => e.message) 
+      });
+    }
+    
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// Update shop - FIXED VERSION
+const updateShop = async (req, res) => {
+  try {
+    const { name, contact, settings } = req.body;
+    
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (contact) {
+      updateData.contact = {
+        email: contact.email,
+        phone: contact.phone,
+        address: contact.address || {}
+      };
+    }
+    if (settings) updateData.settings = settings;
+
+    const shop = await Shop.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('owner', 'name email phone');
+
+    if (!shop) {
+      return res.status(404).json({ message: 'Shop not found' });
+    }
+
+    res.json({
+      message: 'Shop updated successfully',
+      shop
+    });
+  } catch (error) {
+    console.error('Update shop error:', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: Object.values(error.errors).map(e => e.message) 
+      });
+    }
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Other controller functions remain the same...
 const getShops = async (req, res) => {
   try {
-    const { page = 1, limit = 10, status } = req.query;
+    const { page = 1, limit = 10, status, search } = req.query;
     
     const query = {};
-    if (status) {
-      query.status = status;
+    if (status && status !== 'all') {
+      query.isActive = status === 'active';
+    }
+    
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { 'contact.email': { $regex: search, $options: 'i' } },
+        { 'contact.address.city': { $regex: search, $options: 'i' } }
+      ];
     }
 
     const shops = await Shop.find(query)
-      .populate('owner', 'name email phone')
+      .populate('owner', 'name email phone lastLogin')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
@@ -23,7 +177,7 @@ const getShops = async (req, res) => {
     res.json({
       shops,
       totalPages: Math.ceil(total / limit),
-      currentPage: page,
+      currentPage: parseInt(page),
       total
     });
   } catch (error) {
@@ -32,7 +186,6 @@ const getShops = async (req, res) => {
   }
 };
 
-// Get shop by ID
 const getShopById = async (req, res) => {
   try {
     const shop = await Shop.findById(req.params.id)
@@ -63,120 +216,21 @@ const getShopById = async (req, res) => {
   }
 };
 
-// Create new shop (admin only)
-const createShop = async (req, res) => {
-  try {
-    const { name, ownerEmail, ownerName, ownerPhone, address, settings } = req.body;
-
-    // Check if shop name already exists
-    const existingShop = await Shop.findOne({ name });
-    if (existingShop) {
-      return res.status(400).json({ message: 'Shop name already exists' });
-    }
-
-    // Check if owner email exists as a user
-    let owner = await User.findOne({ email: ownerEmail });
-    if (!owner) {
-      // Create new user for the owner
-      owner = new User({
-        name: ownerName,
-        email: ownerEmail,
-        password: 'temp123', // Temporary password, should be changed
-        role: 'shop_owner',
-        phone: ownerPhone
-      });
-      await owner.save();
-    } else {
-      // Update existing user to shop owner role
-      owner.role = 'shop_owner';
-      await owner.save();
-    }
-
-    // Create shop
-    const shop = new Shop({
-      name,
-      owner: owner._id,
-      contact: {
-        email: ownerEmail,
-        phone: ownerPhone
-      },
-      address,
-      settings
-    });
-
-    await shop.save();
-
-    // Update owner's shop reference
-    owner.shop = shop._id;
-    await owner.save();
-
-    // Initialize permissions for the shop
-    await shop.initializePermissions();
-
-    res.status(201).json({
-      message: 'Shop created successfully',
-      shop: await Shop.findById(shop._id).populate('owner', 'name email')
-    });
-  } catch (error) {
-    console.error('Create shop error:', error);
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({ 
-        message: 'Validation error', 
-        errors: Object.values(error.errors).map(e => e.message) 
-      });
-    }
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-// Update shop
-const updateShop = async (req, res) => {
-  try {
-    const { name, contact, address, settings, subscription } = req.body;
-    
-    const updateData = {};
-    if (name) updateData.name = name;
-    if (contact) updateData.contact = contact;
-    if (address) updateData.address = address;
-    if (settings) updateData.settings = settings;
-    if (subscription) updateData.subscription = subscription;
-
-    const shop = await Shop.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    ).populate('owner', 'name email');
-
-    if (!shop) {
-      return res.status(404).json({ message: 'Shop not found' });
-    }
-
-    res.json({
-      message: 'Shop updated successfully',
-      shop
-    });
-  } catch (error) {
-    console.error('Update shop error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-// Update shop status
 const updateShopStatus = async (req, res) => {
   try {
     const { status } = req.body;
     
-    if (!['active', 'inactive', 'suspended'].includes(status)) {
+    if (!['active', 'inactive'].includes(status)) {
       return res.status(400).json({ 
-        message: 'Invalid status. Must be one of: active, inactive, suspended' 
+        message: 'Invalid status. Must be one of: active, inactive' 
       });
     }
 
     const shop = await Shop.findByIdAndUpdate(
       req.params.id,
-      { status },
+      { isActive: status === 'active' },
       { new: true, runValidators: true }
-    ).populate('owner', 'name email');
+    ).populate('owner', 'name email phone');
 
     if (!shop) {
       return res.status(404).json({ message: 'Shop not found' });
@@ -187,7 +241,7 @@ const updateShopStatus = async (req, res) => {
       shop: {
         _id: shop._id,
         name: shop.name,
-        status: shop.status,
+        isActive: shop.isActive,
         owner: shop.owner,
         updatedAt: shop.updatedAt
       }
@@ -198,7 +252,6 @@ const updateShopStatus = async (req, res) => {
   }
 };
 
-// Get shop users
 const getShopUsers = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
