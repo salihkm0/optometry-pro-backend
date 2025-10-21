@@ -135,14 +135,14 @@ process.on('SIGTERM', async () => {
 });
 
 // API Routes
-app.use('/api/auth', require('./Routes/auth'));
-app.use('/api/admin', require('./Routes/admin'));
-app.use('/api/shops', require('./Routes/shops'));
-app.use('/api/customers', require('./Routes/customers'));
-app.use('/api/records', require('./Routes/records'));
-app.use('/api/users', require('./Routes/users'));
-app.use('/api/permissions', require('./Routes/permissions'));
-app.use('/api/user-management', require('./Routes/userManagement'));
+app.use('/api/auth', require('./src/Routes/auth'));
+app.use('/api/admin', require('./src/Routes/admin'));
+app.use('/api/shops', require('./src/Routes/shops'));
+app.use('/api/customers', require('./src/Routes/customers'));
+app.use('/api/records', require('./src/Routes/records'));
+app.use('/api/users', require('./src/Routes/users'));
+app.use('/api/permissions', require('./src/Routes/permissions'));
+app.use('/api/user-management', require('./src/Routes/userManagement'));
 
 // Health check route with detailed information
 app.get('/api/health', async (req, res) => {
